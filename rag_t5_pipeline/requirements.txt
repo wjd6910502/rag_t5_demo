@@ -1,0 +1,14 @@
+# RAG + T5 Pipeline 依赖包
+
+# 核心依赖
+requests>=2.31.0  # HTTP 请求（RAG 和 T5 接口需要）
+qwen-agent  # 用于调用阿里云通义千问大模型（LLM接口需要）
+python-dateutil  # qwen-agent 的依赖（日期处理）
+
+# 可选依赖（完整运行 Pipeline 时需要）
+# torch>=2.0.0  # T5 模型推理（如果使用本地 T5 服务，则由 T5 服务负责）
+# transformers>=4.30.0  # T5 模型（如果使用本地 T5 服务，则由 T5 服务负责）
+# jieba  # 中文分词（如果 T5 模型需要）
+# numpy<2.0.0  # 数值计算
+# tqdm  # 进度条
+

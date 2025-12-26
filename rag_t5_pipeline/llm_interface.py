@@ -132,34 +132,10 @@ class LLMInterface:
         # 解析返回的多个query（假设以换行或特定分隔符分隔）
         queries = [q.strip() for q in response.split('\n') if q.strip()]
         
-        # 过滤：长度必须在5-10个字之间（去除标点符号后计算）
-        filtered_queries = []
-        for q in queries:
-            char_count = count_chinese_chars(q)
-            if 5 <= char_count <= 10:
-                filtered_queries.append(q)
-        
-        queries = filtered_queries
-        
-        # 如果解析出的query数量不够，尝试截断或扩展原始query
-        if len(queries) < num_queries:
-            original_chars = count_chinese_chars(original_query)
-            if 5 <= original_chars <= 10:
-                if original_query not in queries:
-                    queries.append(original_query)
-            elif original_chars > 10:
-                # 如果原始query太长，截断到10个字
-                import re
-                chinese_chars = re.findall(r'[\u4e00-\u9fa5]', original_query)
-                if len(chinese_chars) >= 5:
-                    truncated = ''.join(chinese_chars[:10])
-                    if truncated not in queries:
-                        queries.append(truncated)
-        
         # 限制数量
         queries = queries[:num_queries]
         
-        return queries if queries else [original_query[:10] if len(original_query) > 10 else original_query]
+        return queries if queries else [original_query]
     
     def batch_generate_queries(self, 
                                original_query: str, 
@@ -183,16 +159,14 @@ class LLMInterface:
             prompt = prompt_template.format(query=original_query, num=1)
             response = self._call_api(prompt, temperature=0.8, max_tokens=200)
             query = response.strip()
-            # 检查长度是否在5-10个字之间
+            # 不进行长度过滤，直接返回生成的query
             if query:
-                char_count = count_chinese_chars(query)
-                if 5 <= char_count <= 10:
-                    return query
+                return query
             return None
         
         queries = []
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = [executor.submit(generate_one_query) for _ in range(num_queries * 2)]  # 多生成一些以应对过滤
+            futures = [executor.submit(generate_one_query) for _ in range(num_queries)]
             for future in as_completed(futures):
                 try:
                     query = future.result()
@@ -203,22 +177,13 @@ class LLMInterface:
                 except Exception as e:
                     logger.warning(f"生成query失败: {e}")
         
-        # 如果数量不够，尝试添加原始query（如果长度合适）
+        # 如果数量不够，添加原始query
         if len(queries) < num_queries:
-            original_chars = count_chinese_chars(original_query)
-            if 5 <= original_chars <= 10:
-                if original_query not in queries:
-                    queries.append(original_query)
-            elif original_chars > 10:
-                # 如果原始query太长，截断到10个字
-                import re
-                chinese_chars = re.findall(r'[\u4e00-\u9fa5]', original_query)
-                if len(chinese_chars) >= 5:
-                    truncated = ''.join(chinese_chars[:10])
-                    if truncated not in queries:
-                        queries.append(truncated)
+            if original_query not in queries:
+                queries.append(original_query)
         
-        return queries[:num_queries] if queries else [original_query[:10] if len(original_query) > 10 else original_query]
+        # 返回生成的query，不做截断
+        return queries[:num_queries] if queries else [original_query]
     
     def evaluate_improvement(self, 
                             original_input: str,

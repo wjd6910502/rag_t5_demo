@@ -188,23 +188,6 @@ class RAGT5Pipeline:
         
         logger.info(f"[步骤4] 使用T5模型生成，query长度: {len(query)}, context长度: {len(context)}")
         
-        # 计算系统提示词模板长度（不含context部分）
-        # 使用空字符串格式化来获取模板长度
-        prompt_template = T5_SYSTEM_PROMPT.format(context="")
-        prompt_template_len = len(prompt_template)
-        query_part = f"\n\n问题：{query}"
-        query_part_len = len(query_part)
-        
-        # 计算可用的context长度（留100字符缓冲）
-        # 注意：max_len是token数，这里用字符数近似估算
-        # 中文字符通常1个字符约等于1-2个token，这里保守估计
-        max_context_chars = (self.t5.max_len * 2) - prompt_template_len - query_part_len - 200
-        
-        # 如果context过长，截断
-        if len(context) > max_context_chars and max_context_chars > 0:
-            context = context[:max_context_chars]
-            logger.info(f"Context被截断到 {max_context_chars} 字符（约 {max_context_chars//2} tokens）")
-        
         # 构建系统提示词
         system_prompt = T5_SYSTEM_PROMPT.format(context=context)
         
@@ -310,10 +293,16 @@ class RAGT5Pipeline:
                     logger.warning("[步骤4输出] T5生成结果为空")
                 
                 # 步骤5: 评估改进
+                # 使用query（不带上下文）调用T5模型获取原始输出
+                original_output = self.t5.generate(query) if self.t5 else ""
+                logger.info(f"[步骤5] 不带上下文的T5生成结果长度: {len(original_output)} 字符")
+                if original_output:
+                    logger.info(f"[步骤5] 不带上下文的T5生成结果:\n{original_output}")
+                
                 original_input = f"Query: {query}\nContext: {merged_context[:200]}"
                 evaluation = self.evaluate_improvement(
                     original_input=original_input,
-                    original_output="",
+                    original_output=original_output,
                     improved_output=t5_output
                 )
                 results["evaluation"] = evaluation

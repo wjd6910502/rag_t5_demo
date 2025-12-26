@@ -116,8 +116,37 @@ class RAGInterface:
             return contexts
             
         # 根据实际API返回格式解析
-        # 这里需要根据实际返回格式调整
-        if "data" in search_result:
+        # RAG返回格式：{"chunks": [{"content": [{"type": "text", "text": "..."}], "rerank": {"score": ...}, ...}]}
+        if "chunks" in search_result:
+            for chunk in search_result.get("chunks", []):
+                # 提取content数组中的文本内容
+                content_texts = []
+                content_array = chunk.get("content", [])
+                if isinstance(content_array, list):
+                    for content_item in content_array:
+                        if isinstance(content_item, dict):
+                            # 提取text字段
+                            text = content_item.get("text", "")
+                            if text:
+                                content_texts.append(text)
+                
+                # 合并所有文本内容
+                combined_content = "\n".join(content_texts) if content_texts else ""
+                
+                # 优先使用rerank.score，如果没有则使用recall.score
+                rerank_score = chunk.get("rerank", {}).get("score", 0.0) if isinstance(chunk.get("rerank"), dict) else 0.0
+                recall_score = chunk.get("recall", {}).get("score", 0.0) if isinstance(chunk.get("recall"), dict) else 0.0
+                score = rerank_score if rerank_score > 0 else recall_score
+                
+                if combined_content:  # 只有当有内容时才添加
+                    context = {
+                        "content": combined_content,
+                        "score": score,
+                        "chunk_id": chunk.get("chunk_id", ""),
+                        "metadata": chunk.get("meta", {})
+                    }
+                    contexts.append(context)
+        elif "data" in search_result:
             for item in search_result.get("data", []):
                 context = {
                     "content": item.get("content", ""),

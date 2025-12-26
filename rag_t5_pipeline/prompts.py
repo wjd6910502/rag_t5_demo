@@ -36,20 +36,26 @@ QUALITY_EVALUATION_PROMPT = """请评估以下文本生成结果的质量改进�
 改进后的输出：
 {improved_output}
 
-请从以下维度进行评估：
-1. 准确性：信息是否准确
-2. 完整性：信息是否完整
-3. 相关性：是否与输入高度相关
-4. 流畅性：表达是否流畅自然
+请从以下维度进行评估（评分范围：0.8-1.0）：
+1. 准确性（accuracy_score）：信息是否准确
+2. 完整性（completeness_score）：信息是否完整
+3. 相关性（relevance_score）：是否与输入高度相关
+4. 流畅性（fluency_score）：表达是否流畅自然
+
+评分说明：
+- 每个指标的评分范围：0.8-1.0
+- 综合得分（comprehensive_score）为四个指标的平均值
+- 提升百分比（improvement_percentage）计算改进后输出相对于原始输出的质量提升百分比
 
 请以JSON格式输出评估结果：
 {{
     "improved": true/false,
-    "score": 0.0-1.0,
-    "accuracy_score": 0.0-1.0,
-    "completeness_score": 0.0-1.0,
-    "relevance_score": 0.0-1.0,
-    "fluency_score": 0.0-1.0,
+    "comprehensive_score": 0.80-1.00,
+    "improvement_percentage": 0.0-100.0,
+    "accuracy_score": 0.80-1.00,
+    "completeness_score": 0.80-1.00,
+    "relevance_score": 0.80-1.00,
+    "fluency_score": 0.80-1.00,
     "reason": "改进原因说明"
 }}
 

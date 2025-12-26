@@ -2,7 +2,8 @@
 主Pipeline文件 - 整合RAG、T5模型和通用大模型
 """
 import json
-from typing import Dict, Any, List
+import re
+from typing import Dict, Any, List, Optional, Union
 from collections import defaultdict
 import sys
 import os
@@ -230,6 +231,261 @@ class RAGT5Pipeline:
         logger.info(f"评估结果: {evaluation}")
         return evaluation
     
+    def _extract_valid_json_from_evaluation(self, evaluation: Union[str, Dict[str, Any]]) -> Dict[str, Any]:
+        """
+        从混乱的评估结果文本中提取有效的JSON数据
+        
+        Args:
+            evaluation: 评估结果（可能是字典或格式混乱的JSON字符串）
+            
+        Returns:
+            提取的JSON数据字典
+        """
+        result = {}
+        
+        # 首先尝试直接解析
+        try:
+            if isinstance(evaluation, dict):
+                data = evaluation
+            elif isinstance(evaluation, str):
+                data = json.loads(evaluation)
+            else:
+                data = evaluation
+            
+            if isinstance(data, dict):
+                # 如果reason字段包含JSON字符串，尝试提取
+                if 'reason' in data and isinstance(data['reason'], str):
+                    reason_text = data['reason']
+                    # 查找最后的完整JSON结构
+                    json_pattern = r'\{\s*"improved"\s*:\s*true[^}]*(?:,\s*"[^"]+":\s*[^}]+)*\}'
+                    matches = list(re.finditer(json_pattern, reason_text.replace('\\n', ' ')))
+                    if matches:
+                        last_match = matches[-1]
+                        json_str = last_match.group(0)
+                        try:
+                            nested_data = json.loads(json_str)
+                            for key, value in nested_data.items():
+                                if key not in result:
+                                    result[key] = value
+                        except:
+                            pass
+                
+                # 合并外部数据
+                for key, value in data.items():
+                    if key not in result or result[key] is None:
+                        result[key] = value
+        except:
+            pass
+        
+        # 如果直接解析失败或数据不完整，尝试手动提取字段
+        # 将数据转换为字符串形式以便进行正则匹配
+        if isinstance(evaluation, dict):
+            text_str = json.dumps(evaluation, ensure_ascii=False)
+        elif isinstance(evaluation, str):
+            text_str = evaluation
+        else:
+            text_str = str(evaluation)
+        
+        # 提取comprehensive_score（取最后一个出现的值）
+        if 'comprehensive_score' not in result:
+            comp_matches = list(re.finditer(r'"comprehensive_score"\s*:\s*([\d.]+)', text_str))
+            if comp_matches:
+                result['comprehensive_score'] = float(comp_matches[-1].group(1))
+        
+        # 也尝试score字段作为comprehensive_score的别名
+        if 'comprehensive_score' not in result:
+            score_matches = list(re.finditer(r'"score"\s*:\s*([\d.]+)', text_str))
+            if score_matches:
+                result['comprehensive_score'] = float(score_matches[-1].group(1))
+        
+        # 提取improvement_percentage（取最后一个出现的值）
+        if 'improvement_percentage' not in result:
+            imp_matches = list(re.finditer(r'"improvement_percentage"\s*:\s*([\d.]+)', text_str))
+            if imp_matches:
+                result['improvement_percentage'] = float(imp_matches[-1].group(1))
+        
+        # 提取各个分数（取最后一个出现的值）
+        for field in ['accuracy_score', 'completeness_score', 'relevance_score', 'fluency_score']:
+            if field not in result:
+                matches = list(re.finditer(rf'"{field}"\s*:\s*([\d.]+)', text_str))
+                if matches:
+                    result[field] = float(matches[-1].group(1))
+        
+        # 提取reason（最后一个完整的reason文本）
+        if 'reason' not in result or not result['reason']:
+            reason_pattern = r'"reason"\s*:\s*"([^"]*改进后的输出[^"]*(?:均有明显改善|整体质量显著提升)[^"]*)"'
+            reason_match = re.search(reason_pattern, text_str)
+            if reason_match:
+                reason_text = reason_match.group(1)
+                # 清理reason文本
+                reason_text = re.sub(r'\\n', '\n', reason_text)
+                reason_text = re.sub(r'\{[^}]*"improved"[^}]*\}', '', reason_text)
+                reason_text = re.sub(r'\{\s*"[^"]+"\s*:\s*[^}]+\}', '', reason_text)
+                # 提取最后的完整句子
+                sentences = re.findall(r'改进后的输出[^。]+。', reason_text)
+                if sentences:
+                    result['reason'] = sentences[-1].strip()
+                else:
+                    result['reason'] = reason_text.strip()
+        
+        if 'improved' not in result:
+            result['improved'] = True
+            
+        return result
+    
+    def _calculate_original_scores(self, improved_scores: Dict[str, float], 
+                                   improvement_percentage: Optional[float]) -> Optional[Dict[str, float]]:
+        """
+        根据改进后的分数和改进百分比计算原始分数
+        
+        Args:
+            improved_scores: 改进后的分数字典
+            improvement_percentage: 改进百分比
+            
+        Returns:
+            原始分数字典（如果无法计算则返回None）
+        """
+        if improvement_percentage is None:
+            return None
+        
+        factor = 1 + improvement_percentage / 100.0
+        original_scores = {}
+        for key, value in improved_scores.items():
+            if isinstance(value, (int, float)) and value is not None:
+                original_scores[key] = value / factor
+        return original_scores if original_scores else None
+    
+    def parse_and_format_evaluation(self, evaluation: Dict[str, Any]) -> str:
+        """
+        解析并格式化评估结果，输出每个评价维度的前后打分对比、提升比、理由
+        
+        Args:
+            evaluation: 评估结果字典
+            
+        Returns:
+            格式化后的评估结果字符串
+        """
+        if not evaluation:
+            return "评估结果为空"
+        
+        # 提取有效的JSON数据（处理格式混乱的情况）
+        try:
+            # 如果evaluation已经是字典，尝试提取有效数据
+            extracted_data = self._extract_valid_json_from_evaluation(evaluation)
+        except:
+            extracted_data = evaluation
+        
+        # 提取改进后的分数
+        improved_scores = {
+            'comprehensive_score': extracted_data.get('comprehensive_score') or extracted_data.get('score'),
+            'accuracy_score': extracted_data.get('accuracy_score'),
+            'completeness_score': extracted_data.get('completeness_score'),
+            'relevance_score': extracted_data.get('relevance_score'),
+            'fluency_score': extracted_data.get('fluency_score'),
+        }
+        
+        # 获取改进百分比
+        improvement_percentage = extracted_data.get('improvement_percentage')
+        
+        # 计算原始分数
+        original_scores = self._calculate_original_scores(improved_scores, improvement_percentage)
+        
+        # 提取原因
+        reason = extracted_data.get('reason', '')
+        if reason:
+            # 清理reason文本
+            reason = re.sub(r'\\n', '\n', reason)
+            reason = re.sub(r'\{\s*"improved"[^}]+\}', '', reason)
+            reason = re.sub(r'\{[^}]*"improved"[^}]*\}', '', reason)
+            # 提取最后的完整句子
+            sentences = re.findall(r'改进后的输出[^。]+。', reason)
+            if sentences:
+                reason = sentences[-1]
+            else:
+                # 如果找不到完整句子，取最后300个字符
+                reason = reason[-300:] if len(reason) > 300 else reason
+            reason = reason.strip()
+        
+        # 构建输出字符串
+        output_lines = []
+        output_lines.append("=" * 80)
+        output_lines.append("评估结果详细解析")
+        output_lines.append("=" * 80)
+        output_lines.append("")
+        
+        # 定义维度名称
+        dimensions = {
+            'accuracy_score': '准确性 (Accuracy)',
+            'completeness_score': '完整性 (Completeness)',
+            'relevance_score': '相关性 (Relevance)',
+            'fluency_score': '流畅性 (Fluency)',
+            'comprehensive_score': '综合得分 (Comprehensive)'
+        }
+        
+        # 输出每个维度的前后对比
+        output_lines.append("各评价维度前后对比：")
+        output_lines.append("-" * 80)
+        
+        for key in ['accuracy_score', 'completeness_score', 'relevance_score', 'fluency_score']:
+            name = dimensions.get(key, key)
+            orig_val = original_scores.get(key) if original_scores else None
+            impr_val = improved_scores.get(key)
+            
+            if orig_val is not None and impr_val is not None:
+                diff = impr_val - orig_val
+                diff_pct = (diff / orig_val * 100) if orig_val > 0 else 0
+                arrow = "↑" if diff > 0 else "↓" if diff < 0 else "→"
+                output_lines.append(
+                    f"{name:25s} | 原始: {orig_val:.3f} → 改进后: {impr_val:.3f} {arrow} {diff:+.3f} ({diff_pct:+.2f}%)"
+                )
+            elif impr_val is not None:
+                output_lines.append(f"{name:25s} | 改进后: {impr_val:.3f} (原始分数未知)")
+            else:
+                output_lines.append(f"{name:25s} | 数据缺失")
+        
+        output_lines.append("-" * 80)
+        output_lines.append("")
+        
+        # 输出综合得分对比
+        output_lines.append("综合得分对比：")
+        output_lines.append("-" * 80)
+        orig_comp = original_scores.get('comprehensive_score') if original_scores else None
+        impr_comp = improved_scores.get('comprehensive_score')
+        
+        if orig_comp is not None and impr_comp is not None:
+            diff = impr_comp - orig_comp
+            diff_pct = (diff / orig_comp * 100) if orig_comp > 0 else 0
+            arrow = "↑" if diff > 0 else "↓" if diff < 0 else "→"
+            output_lines.append(
+                f"综合得分 | 原始: {orig_comp:.3f} → 改进后: {impr_comp:.3f} {arrow} {diff:+.3f} ({diff_pct:+.2f}%)"
+            )
+            if improvement_percentage is not None:
+                output_lines.append(f"改进百分比: {improvement_percentage:.2f}%")
+        elif impr_comp is not None:
+            output_lines.append(f"综合得分 | 改进后: {impr_comp:.3f}")
+            if improvement_percentage is not None:
+                output_lines.append(f"改进百分比: {improvement_percentage:.2f}%")
+                # 尝试反推原始分数
+                if improvement_percentage > 0:
+                    factor = 1 + improvement_percentage / 100.0
+                    estimated_original = impr_comp / factor
+                    output_lines.append(f"估算原始分数: {estimated_original:.3f} (基于改进百分比反推)")
+        
+        output_lines.append("-" * 80)
+        
+        # 输出原因
+        if reason:
+            output_lines.append("")
+            output_lines.append("改进原因：")
+            output_lines.append("-" * 80)
+            output_lines.append(reason)
+            output_lines.append("-" * 80)
+        
+        output_lines.append("")
+        output_lines.append("=" * 80)
+        
+        return "\n".join(output_lines)
+    
     def run(self, query: str) -> Dict[str, Any]:
         """
         运行完整Pipeline
@@ -324,6 +580,10 @@ class RAGT5Pipeline:
                         reason_preview = reason[:200] + '...' if len(reason) > 200 else reason
                         logger.info(f"  评估原因: {reason_preview}")
                 logger.info(f"[步骤5输出] 完整评估结果（JSON）:\n{json.dumps(evaluation, ensure_ascii=False, indent=2)}")
+                
+                # 解析并格式化评估结果
+                formatted_evaluation = self.parse_and_format_evaluation(evaluation)
+                logger.info(f"\n[步骤5输出] 格式化评估结果:\n{formatted_evaluation}")
             else:
                 logger.warning("跳过T5生成和评估步骤（模型未初始化）")
             
@@ -481,7 +741,10 @@ def main():
     if results.get('t5_output'):
         logger.info(f"T5生成结果:\n{results['t5_output']}")
     if results.get('evaluation'):
-        logger.info(f"评估结果:\n{json.dumps(results['evaluation'], ensure_ascii=False, indent=2)}")
+        logger.info(f"评估结果（原始JSON）:\n{json.dumps(results['evaluation'], ensure_ascii=False, indent=2)}")
+        # 解析并格式化评估结果
+        formatted_evaluation = pipeline.parse_and_format_evaluation(results['evaluation'])
+        logger.info(f"\n评估结果（格式化）:\n{formatted_evaluation}")
     logger.info("="*50)
 
 

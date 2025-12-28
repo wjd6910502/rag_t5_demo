@@ -5,6 +5,7 @@
 """
 import json
 import os
+import re
 import logging
 from typing import List, Dict, Any
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -213,16 +214,80 @@ class LLMInterface:
         response = self._call_api(prompt, temperature=0.3, max_tokens=500)
         
         # 解析评估结果（假设返回JSON格式或特定格式）
+        result = None
         try:
-            # 尝试解析为JSON
-            result = json.loads(response)
-        except:
-            # 如果不是JSON，尝试解析文本
+            # 首先清理响应文本，移除markdown代码块标记
+            cleaned_response = response
+            # 移除所有markdown代码块标记
+            cleaned_response = re.sub(r'```+json\s*', '', cleaned_response)
+            cleaned_response = re.sub(r'```+\s*', '', cleaned_response)
+            
+            # 尝试直接解析为JSON
+            result = json.loads(cleaned_response)
+        except json.JSONDecodeError:
+            # 如果直接解析失败，尝试提取最后一个完整的JSON对象
+            try:
+                # 查找所有可能的JSON对象
+                json_pattern = r'\{\s*"improved"\s*:\s*(?:true|false)[^}]*\}'
+                matches = list(re.finditer(json_pattern, cleaned_response, re.DOTALL))
+                if matches:
+                    # 取最后一个匹配，尝试扩展以包含完整对象
+                    last_match = matches[-1]
+                    start_pos = last_match.start()
+                    # 从开始位置向前查找完整的JSON对象
+                    brace_count = 0
+                    end_pos = start_pos
+                    for i in range(start_pos, len(cleaned_response)):
+                        if cleaned_response[i] == '{':
+                            brace_count += 1
+                        elif cleaned_response[i] == '}':
+                            brace_count -= 1
+                            if brace_count == 0:
+                                end_pos = i + 1
+                                break
+                    if end_pos > start_pos:
+                        json_str = cleaned_response[start_pos:end_pos]
+                        result = json.loads(json_str)
+            except:
+                pass
+        
+        # 如果JSON解析失败，尝试解析文本
+        if not result:
             result = {
                 "improved": "是" in response or "yes" in response.lower() or "true" in response.lower(),
                 "score": self._extract_score(response),
                 "reason": response
             }
+        
+        # 清理reason字段（如果存在）
+        if result and 'reason' in result and isinstance(result['reason'], str):
+            reason_text = result['reason']
+            # 移除所有markdown代码块标记
+            reason_text = re.sub(r'```+json\s*', '', reason_text)
+            reason_text = re.sub(r'```+\s*', '', reason_text)
+            # 移除JSON对象片段
+            reason_text = re.sub(r'\{\s*"improved"[^}]*\}', '', reason_text)
+            reason_text = re.sub(r'\{[^}]*"improved"[^}]*\}', '', reason_text)
+            reason_text = re.sub(r'\{\s*"[^"]+"\s*:\s*[^}]+\}', '', reason_text)
+            # 移除JSON字段名和值
+            reason_text = re.sub(r'"\w+"\s*:\s*[^,}\]]+[,}\]]?', '', reason_text)
+            # 移除多余的空白字符
+            reason_text = re.sub(r'\s+', ' ', reason_text)
+            # 提取最后的完整句子
+            sentences = re.findall(r'改进后的输出[^。]+。', reason_text)
+            if sentences:
+                result['reason'] = sentences[-1].strip()
+            else:
+                # 如果找不到完整句子，尝试提取包含"改进"的文本
+                improvement_sentences = re.findall(r'[^。]*改进[^。]+。', reason_text)
+                if improvement_sentences:
+                    result['reason'] = improvement_sentences[-1].strip()
+                else:
+                    cleaned = reason_text.strip()
+                    if cleaned and len(cleaned) > 10:
+                        result['reason'] = cleaned[-200:] if len(cleaned) > 200 else cleaned
+                    else:
+                        result['reason'] = cleaned
         
         return result
     

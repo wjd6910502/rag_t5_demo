@@ -319,14 +319,52 @@ class RAGT5Pipeline:
                 reason_text = reason_match.group(1)
                 # 清理reason文本
                 reason_text = re.sub(r'\\n', '\n', reason_text)
+                # 移除所有markdown代码块标记
+                reason_text = re.sub(r'```+json\s*', '', reason_text)
+                reason_text = re.sub(r'```+\s*', '', reason_text)
+                # 移除所有JSON对象片段
+                reason_text = re.sub(r'\{\s*"improved"[^}]*\}', '', reason_text)
                 reason_text = re.sub(r'\{[^}]*"improved"[^}]*\}', '', reason_text)
                 reason_text = re.sub(r'\{\s*"[^"]+"\s*:\s*[^}]+\}', '', reason_text)
+                # 移除JSON字段名和值
+                reason_text = re.sub(r'"\w+"\s*:\s*[^,}\]]+[,}\]]?', '', reason_text)
                 # 提取最后的完整句子
                 sentences = re.findall(r'改进后的输出[^。]+。', reason_text)
                 if sentences:
                     result['reason'] = sentences[-1].strip()
                 else:
                     result['reason'] = reason_text.strip()
+        
+        # 清理已有的reason字段
+        if 'reason' in result and isinstance(result['reason'], str):
+            reason_text = result['reason']
+            # 移除所有markdown代码块标记
+            reason_text = re.sub(r'```+json\s*', '', reason_text)
+            reason_text = re.sub(r'```+\s*', '', reason_text)
+            # 移除所有JSON对象片段
+            reason_text = re.sub(r'\{\s*"improved"[^}]*\}', '', reason_text)
+            reason_text = re.sub(r'\{[^}]*"improved"[^}]*\}', '', reason_text)
+            reason_text = re.sub(r'\{\s*"[^"]+"\s*:\s*[^}]+\}', '', reason_text)
+            # 移除JSON字段名和值
+            reason_text = re.sub(r'"\w+"\s*:\s*[^,}\]]+[,}\]]?', '', reason_text)
+            # 移除多余的空白字符
+            reason_text = re.sub(r'\s+', ' ', reason_text)
+            # 提取最后的完整句子
+            sentences = re.findall(r'改进后的输出[^。]+。', reason_text)
+            if sentences:
+                result['reason'] = sentences[-1].strip()
+            else:
+                # 如果找不到完整句子，尝试提取包含"改进"的文本
+                improvement_sentences = re.findall(r'[^。]*改进[^。]+。', reason_text)
+                if improvement_sentences:
+                    result['reason'] = improvement_sentences[-1].strip()
+                else:
+                    # 清理后如果还有内容，取最后200个字符
+                    cleaned = reason_text.strip()
+                    if cleaned and len(cleaned) > 10:
+                        result['reason'] = cleaned[-200:] if len(cleaned) > 200 else cleaned
+                    else:
+                        result['reason'] = ''
         
         if 'improved' not in result:
             result['improved'] = True
@@ -395,15 +433,29 @@ class RAGT5Pipeline:
         if reason:
             # 清理reason文本
             reason = re.sub(r'\\n', '\n', reason)
+            # 移除所有markdown代码块标记
+            reason = re.sub(r'```+json\s*', '', reason)
+            reason = re.sub(r'```+\s*', '', reason)
+            # 移除所有JSON对象片段
             reason = re.sub(r'\{\s*"improved"[^}]+\}', '', reason)
             reason = re.sub(r'\{[^}]*"improved"[^}]*\}', '', reason)
+            reason = re.sub(r'\{\s*"[^"]+"\s*:\s*[^}]+\}', '', reason)
+            # 移除JSON字段名和值
+            reason = re.sub(r'"\w+"\s*:\s*[^,}\]]+[,}\]]?', '', reason)
+            # 移除多余的空白字符
+            reason = re.sub(r'\s+', ' ', reason)
             # 提取最后的完整句子
             sentences = re.findall(r'改进后的输出[^。]+。', reason)
             if sentences:
                 reason = sentences[-1]
             else:
-                # 如果找不到完整句子，取最后300个字符
-                reason = reason[-300:] if len(reason) > 300 else reason
+                # 如果找不到完整句子，尝试提取包含"改进"的文本
+                improvement_sentences = re.findall(r'[^。]*改进[^。]+。', reason)
+                if improvement_sentences:
+                    reason = improvement_sentences[-1]
+                else:
+                    # 如果找不到完整句子，取最后300个字符
+                    reason = reason[-300:] if len(reason) > 300 else reason
             reason = reason.strip()
         
         # 构建输出字符串

@@ -49,27 +49,20 @@ class T5ModelInterface:
             print(f"警告: T5服务连接失败 ({self.base_url}): {e}")
             print("请确保T5服务已启动")
     
-    def generate(self, text: str, system_prompt: str = None) -> str:
+    def generate(self, text: str) -> str:
         """
         生成文本
         
         Args:
             text: 输入文本
-            system_prompt: 系统提示词（可选，会与text拼接）
             
         Returns:
             生成的文本
         """
-        # 如果有系统提示词，拼接输入
-        if system_prompt:
-            input_text = f"{system_prompt}\n{text}"
-        else:
-            input_text = text
-        
         # 构建请求
         url = f"{self.base_url}/generate"
         payload = {
-            "text": input_text,
+            "text": text,
             "task": self.task,
             "max_length": self.max_len_generate,
             "min_length": max(1, self.max_len_generate // 10),  # 最小长度为最大长度的1/10
@@ -148,7 +141,7 @@ class T5ModelInterface:
             print("回退到单个请求模式...")
             results = []
             for text in texts:
-                result = self.generate(text, system_prompt)
+                result = self.generate(text)
                 results.append(result)
             return results
 

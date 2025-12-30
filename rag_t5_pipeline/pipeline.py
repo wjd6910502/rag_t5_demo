@@ -189,11 +189,15 @@ class RAGT5Pipeline:
         
         logger.info(f"[步骤4] 使用T5模型生成，query长度: {len(query)}, context长度: {len(context)}")
         
+        # 将合并后的上下文和query组合作为输入
         # 构建系统提示词
         system_prompt = T5_SYSTEM_PROMPT.format(context=context)
         
-        # 生成（传入query作为text，system_prompt作为系统提示词）
-        result = self.t5.generate(query, system_prompt=system_prompt)
+        # 将系统提示词和query组合作为完整的输入文本
+        combined_input = f"{system_prompt}\n{query}"
+        
+        # 生成（将合并后的上下文和query都作为输入）
+        result = self.t5.generate(combined_input)
         logger.info(f"生成结果长度: {len(result)} 字符")
         return result
     
@@ -393,12 +397,14 @@ class RAGT5Pipeline:
                 original_scores[key] = value / factor
         return original_scores if original_scores else None
     
-    def parse_and_format_evaluation(self, evaluation: Dict[str, Any]) -> str:
+    def parse_and_format_evaluation(self, evaluation: Dict[str, Any], original_output: str = "", improved_output: str = "") -> str:
         """
         解析并格式化评估结果，输出每个评价维度的前后打分对比、提升比、理由
         
         Args:
             evaluation: 评估结果字典
+            original_output: 原始T5输出（不带上下文）
+            improved_output: 改进后T5输出（带上下文）
             
         Returns:
             格式化后的评估结果字符串
@@ -463,6 +469,22 @@ class RAGT5Pipeline:
         output_lines.append("=" * 80)
         output_lines.append("评估结果详细解析")
         output_lines.append("=" * 80)
+        output_lines.append("")
+        
+        # 输出两个对比的结果摘要
+        output_lines.append("[结果摘要对比]")
+        output_lines.append("原始T5输出（不带上下文）:")
+        if original_output:
+            orig_preview = original_output[:200] + '...' if len(original_output) > 200 else original_output
+            output_lines.append(f"  {orig_preview}")
+        else:
+            output_lines.append("  无原始输出")
+
+        output_lines.append("\n改进后T5输出（带上下文）:")
+        if improved_output:
+            output_lines.append(f"  {improved_output}")
+        else:
+            output_lines.append("  改进后输出为空")
         output_lines.append("")
         
         # 定义维度名称
@@ -553,7 +575,8 @@ class RAGT5Pipeline:
             "generated_queries": [],
             "contexts": [],
             "merged_context": "",
-            "t5_output": "",
+            "original_t5_output": "",  # 不带上下文的T5输出
+            "t5_output": "",  # 带上下文的T5输出
             "evaluation": {}
         }
         
@@ -603,6 +626,7 @@ class RAGT5Pipeline:
                 # 步骤5: 评估改进
                 # 使用query（不带上下文）调用T5模型获取原始输出
                 original_output = self.t5.generate(query) if self.t5 else ""
+                results["original_t5_output"] = original_output  # 保存原始T5输出
                 logger.info(f"[步骤5] 不带上下文的T5生成结果长度: {len(original_output)} 字符")
                 if original_output:
                     logger.info(f"[步骤5] 不带上下文的T5生成结果:\n{original_output}")
@@ -617,15 +641,35 @@ class RAGT5Pipeline:
                 logger.info(f"[步骤5输出] 评估结果:")
                 logger.info(f"  是否改进: {evaluation.get('improved', '未知')}")
                 if 'score' in evaluation:
-                    logger.info(f"  总体评分: {evaluation['score']:.3f}")
+                    score_val = evaluation['score']
+                    if isinstance(score_val, (int, float)):
+                        logger.info(f"  总体评分: {score_val:.3f}")
+                    else:
+                        logger.info(f"  总体评分: {score_val}")
                 if 'accuracy_score' in evaluation:
-                    logger.info(f"  准确性评分: {evaluation.get('accuracy_score', 'N/A'):.3f if isinstance(evaluation.get('accuracy_score'), (int, float)) else 'N/A'}")
+                    acc_score = evaluation.get('accuracy_score')
+                    if isinstance(acc_score, (int, float)):
+                        logger.info(f"  准确性评分: {acc_score:.3f}")
+                    else:
+                        logger.info(f"  准确性评分: {acc_score}")
                 if 'completeness_score' in evaluation:
-                    logger.info(f"  完整性评分: {evaluation.get('completeness_score', 'N/A'):.3f if isinstance(evaluation.get('completeness_score'), (int, float)) else 'N/A'}")
+                    comp_score = evaluation.get('completeness_score')
+                    if isinstance(comp_score, (int, float)):
+                        logger.info(f"  完整性评分: {comp_score:.3f}")
+                    else:
+                        logger.info(f"  完整性评分: {comp_score}")
                 if 'relevance_score' in evaluation:
-                    logger.info(f"  相关性评分: {evaluation.get('relevance_score', 'N/A'):.3f if isinstance(evaluation.get('relevance_score'), (int, float)) else 'N/A'}")
+                    rel_score = evaluation.get('relevance_score')
+                    if isinstance(rel_score, (int, float)):
+                        logger.info(f"  相关性评分: {rel_score:.3f}")
+                    else:
+                        logger.info(f"  相关性评分: {rel_score}")
                 if 'fluency_score' in evaluation:
-                    logger.info(f"  流畅性评分: {evaluation.get('fluency_score', 'N/A'):.3f if isinstance(evaluation.get('fluency_score'), (int, float)) else 'N/A'}")
+                    flu_score = evaluation.get('fluency_score')
+                    if isinstance(flu_score, (int, float)):
+                        logger.info(f"  流畅性评分: {flu_score:.3f}")
+                    else:
+                        logger.info(f"  流畅性评分: {flu_score}")
                 if 'reason' in evaluation:
                     reason = evaluation.get('reason', '')
                     if reason:
@@ -634,7 +678,7 @@ class RAGT5Pipeline:
                 logger.info(f"[步骤5输出] 完整评估结果（JSON）:\n{json.dumps(evaluation, ensure_ascii=False, indent=2)}")
                 
                 # 解析并格式化评估结果
-                formatted_evaluation = self.parse_and_format_evaluation(evaluation)
+                formatted_evaluation = self.parse_and_format_evaluation(evaluation, original_output, t5_output)
                 logger.info(f"\n[步骤5输出] 格式化评估结果:\n{formatted_evaluation}")
             else:
                 logger.warning("跳过T5生成和评估步骤（模型未初始化）")
@@ -790,12 +834,35 @@ def main():
     logger.info(f"生成的查询数量: {len(results['generated_queries'])}")
     logger.info(f"获取的上下文数量: {len(results['contexts'])}")
     logger.info(f"合并后的上下文长度: {len(results['merged_context'])} 字符")
+    
+    # 显示T5的两次输出对比
+    logger.info("\n" + "-"*50)
+    logger.info("T5输出对比:")
+    logger.info("-"*50)
+    if results.get('original_t5_output'):
+        logger.info(f"[第一次输出 - 不带上下文]")
+        logger.info(f"长度: {len(results['original_t5_output'])} 字符")
+        logger.info(f"内容:\n{results['original_t5_output']}")
+    else:
+        logger.info("[第一次输出 - 不带上下文] 无输出")
+    
+    logger.info("")
     if results.get('t5_output'):
-        logger.info(f"T5生成结果:\n{results['t5_output']}")
+        logger.info(f"[第二次输出 - 带上下文]")
+        logger.info(f"长度: {len(results['t5_output'])} 字符")
+        logger.info(f"内容:\n{results['t5_output']}")
+    else:
+        logger.info("[第二次输出 - 带上下文] 无输出")
+    logger.info("-"*50)
+    
     if results.get('evaluation'):
-        logger.info(f"评估结果（原始JSON）:\n{json.dumps(results['evaluation'], ensure_ascii=False, indent=2)}")
-        # 解析并格式化评估结果
-        formatted_evaluation = pipeline.parse_and_format_evaluation(results['evaluation'])
+        logger.info(f"\n评估结果（原始JSON）:\n{json.dumps(results['evaluation'], ensure_ascii=False, indent=2)}")
+        # 解析并格式化评估结果（传入两次T5输出用于对比）
+        formatted_evaluation = pipeline.parse_and_format_evaluation(
+            results['evaluation'], 
+            results.get('original_t5_output', ''), 
+            results.get('t5_output', '')
+        )
         logger.info(f"\n评估结果（格式化）:\n{formatted_evaluation}")
     logger.info("="*50)
 
